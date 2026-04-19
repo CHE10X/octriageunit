@@ -51,7 +51,7 @@ It's also read-only. There's no risk to running it in a degraded production envi
 
 | Signal | What it checks |
 |--------|---------------|
-| `gateway` | HTTP liveness probe via healthcheck agent — no CLI, no WebSocket |
+| `gateway` | Direct local HTTP probe owned by triage; optional sidecar telemetry if present |
 | `sessions` | Agent count, session topology, orphan detection |
 | `digest` | DIGEST.md freshness — memory system health |
 | `disk` | Available disk space on the canonical root volume (`/`) |
@@ -89,7 +89,9 @@ Every run writes a timestamped bundle to `~/triage-bundles/`:
 | File | Contents |
 |------|----------|
 | `bundle_summary.txt` | Version, timestamp, hostname |
-| `gateway_health.json` | Copied from healthcheck agent output |
+| `gateway_health.json` | Baseline direct probe result written by triage |
+| `gateway_health_enrichment.json` | Optional copied sidecar telemetry if present |
+| `gateway_probe_meta.txt` | Probe target, path, latency, baseline state, telemetry state |
 | `gateway_err_tail.txt` | Filtered tail of `gateway.err.log` |
 | `agent_session_topology.txt` | Session counts, agent list, orphan detection |
 | `verify_integrity.txt` | Installed SHA, expected SHA, verify state |
@@ -101,27 +103,34 @@ Every run writes a timestamped bundle to `~/triage-bundles/`:
 
 ---
 
-## Gateway Healthcheck Setup
+## Gateway Health
 
-The `gateway` collector reads a health file written by a background healthcheck agent. Without it, triage reports `gateway: NOT_DETECTED`.
+`triage` now owns baseline gateway health directly. On a clean install it probes the configured local gateway URL itself, with no healthcheck writer, LaunchAgent, or prewritten file required.
 
-The healthcheck agent must set `OPENCLAW_GATEWAY_URL` to the local gateway address. Example launchd plist snippet:
+Probe resolution order:
 
-```xml
-<key>OPENCLAW_GATEWAY_URL</key>
-<string>http://127.0.0.1:18789</string>
-```
+1. `OPENCLAW_GATEWAY_URL` if set
+2. `~/.openclaw/openclaw.json` gateway settings if available
+3. Fallback `http://127.0.0.1:18789`
 
-Triage never probes the gateway itself — it reads the file the healthcheck agent writes. This keeps triage fast (sub-2s) and avoids WebSocket overhead.
+Optional sidecar telemetry at `~/openclaw/health/gateway_health.json` is still consumed when present, but only as enrichment. If that file is missing, stale, or malformed, baseline gateway health still comes from the direct probe.
 
 **Gateway states:**
 
 | State | Meaning |
 |-------|---------|
-| `OK` | Health file fresh, gateway responded with HTTP 2xx/3xx/4xx/5xx |
-| `WARN` | Health file fresh but probe reported failure |
-| `STALE` | Health file older than 120s — healthcheck agent may be stuck |
-| `NOT_DETECTED` | Health file missing — healthcheck agent not running or `OPENCLAW_GATEWAY_URL` not set |
+| `OK` | Gateway reachable and healthy via direct probe |
+| `WARN` | Gateway reachable but returned a degraded/error HTTP response |
+| `DOWN` | Gateway unreachable from triage |
+
+Telemetry enrichment states are reported in the gateway note and metadata:
+
+| Telemetry | Meaning |
+|-----------|---------|
+| `AVAILABLE` | Optional enrichment file parsed successfully |
+| `UNAVAILABLE` | Optional enrichment file absent |
+| `STALE` | Optional enrichment file exists but is older than 120s |
+| `MALFORMED` | Optional enrichment file exists but could not be parsed |
 
 ---
 
@@ -160,6 +169,8 @@ curl -fsSL https://raw.githubusercontent.com/acmeagentsupply/triage/main/install
 ```bash
 curl -fsSL https://raw.githubusercontent.com/acmeagentsupply/triage/main/install.sh | bash -s -- --user
 ```
+
+No background healthcheck service is required for baseline gateway status after install.
 
 **Verify install matches source:**
 ```bash

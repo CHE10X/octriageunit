@@ -31,6 +31,142 @@ def run_bash(script: str, home: pathlib.Path, bin_dir: pathlib.Path) -> subproce
 
 
 class CollectorHonestyTests(unittest.TestCase):
+    def test_gateway_direct_probe_reports_ok_without_sidecar(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = pathlib.Path(tmpdir)
+            home = root / "home"
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            (home / ".openclaw" / "ops" / "logs").mkdir(parents=True)
+
+            result = run_bash(
+                textwrap.dedent(
+                    f"""
+                    source "{REPO_ROOT / 'bin/control-plane-triage'}"
+                    curl() {{
+                      local out=""
+                      while [[ $# -gt 0 ]]; do
+                        case "$1" in
+                          --output)
+                            out="$2"; shift 2 ;;
+                          --silent|--show-error)
+                            shift 1 ;;
+                          --connect-timeout|--max-time|--write-out)
+                            shift 2 ;;
+                          *)
+                            shift 1 ;;
+                        esac
+                      done
+                      printf '%s\n' '{{"status":"ok"}}' > "$out"
+                      printf '200 0.012'
+                      return 0
+                    }}
+                    source "{REPO_ROOT / 'lib/collectors.d/10_gateway.sh'}"
+                    bundle="$(mktemp -d)"
+                    collector_run "$bundle"
+                    rc="$?"
+                    printf -- '--- health ---\\n'
+                    cat "$bundle/gateway_health.txt"
+                    printf -- '--- meta ---\\n'
+                    cat "$bundle/gateway_probe_meta.txt"
+                    exit "$rc"
+                    """
+                ),
+                home,
+                bin_dir,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("state=OK", result.stdout)
+            self.assertIn("telemetry=UNAVAILABLE", result.stdout)
+            self.assertNotIn("NOT_DETECTED", result.stdout)
+            self.assertIn("state: OK", result.stdout)
+            self.assertIn("probe_http_code: 200", result.stdout)
+
+    def test_gateway_malformed_enrichment_does_not_override_baseline_probe(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = pathlib.Path(tmpdir)
+            home = root / "home"
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            (home / ".openclaw" / "ops" / "logs").mkdir(parents=True)
+            health_dir = home / "openclaw" / "health"
+            health_dir.mkdir(parents=True)
+            (health_dir / "gateway_health.json").write_text("{not-json\n")
+
+            result = run_bash(
+                textwrap.dedent(
+                    f"""
+                    source "{REPO_ROOT / 'bin/control-plane-triage'}"
+                    curl() {{
+                      local out=""
+                      while [[ $# -gt 0 ]]; do
+                        case "$1" in
+                          --output)
+                            out="$2"; shift 2 ;;
+                          --silent|--show-error)
+                            shift 1 ;;
+                          --connect-timeout|--max-time|--write-out)
+                            shift 2 ;;
+                          *)
+                            shift 1 ;;
+                        esac
+                      done
+                      printf '%s\n' 'ok' > "$out"
+                      printf '200 0.021'
+                      return 0
+                    }}
+                    source "{REPO_ROOT / 'lib/collectors.d/10_gateway.sh'}"
+                    bundle="$(mktemp -d)"
+                    collector_run "$bundle"
+                    rc="$?"
+                    printf -- '--- meta ---\\n'
+                    cat "$bundle/gateway_probe_meta.txt"
+                    test -f "$bundle/gateway_health_enrichment.json"
+                    exit "$rc"
+                    """
+                ),
+                home,
+                bin_dir,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("state=OK", result.stdout)
+            self.assertIn("telemetry=MALFORMED", result.stdout)
+            self.assertIn("telemetry_state: MALFORMED", result.stdout)
+
+    def test_gateway_direct_probe_reports_down_when_unreachable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = pathlib.Path(tmpdir)
+            home = root / "home"
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            (home / ".openclaw" / "ops" / "logs").mkdir(parents=True)
+
+            result = run_bash(
+                textwrap.dedent(
+                    f"""
+                    source "{REPO_ROOT / 'bin/control-plane-triage'}"
+                    curl() {{
+                      return 7
+                    }}
+                    source "{REPO_ROOT / 'lib/collectors.d/10_gateway.sh'}"
+                    bundle="$(mktemp -d)"
+                    collector_run "$bundle"
+                    rc="$?"
+                    cat "$bundle/gateway_health.txt"
+                    exit "$rc"
+                    """
+                ),
+                home,
+                bin_dir,
+            )
+
+            self.assertEqual(result.returncode, 20, result.stderr)
+            self.assertIn("state=DOWN", result.stdout)
+            self.assertIn("state: DOWN", result.stdout)
+            self.assertNotIn("NOT_DETECTED", result.stdout)
+
     def test_disk_collector_uses_root_volume_not_home_data_slice(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = pathlib.Path(tmpdir)

@@ -230,6 +230,167 @@ capture_command() {
   return 0
 }
 
+octu_gateway_base_url() {
+  python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+for key in ("OPENCLAW_GATEWAY_URL", "OCTU_GATEWAY_URL"):
+    value = os.environ.get(key, "").strip()
+    if value:
+        print(value)
+        raise SystemExit(0)
+
+config_path = Path.home() / ".openclaw" / "openclaw.json"
+if config_path.exists():
+    try:
+        data = json.loads(config_path.read_text())
+        gateway = data.get("gateway", {}) if isinstance(data, dict) else {}
+        for key in ("healthUrl", "url", "localUrl"):
+            value = gateway.get(key)
+            if isinstance(value, str) and value.strip():
+                print(value.strip())
+                raise SystemExit(0)
+
+        port = gateway.get("port", 18789)
+        try:
+            port = int(port)
+        except Exception:
+            port = 18789
+        host = gateway.get("bind") or gateway.get("host") or "127.0.0.1"
+        if isinstance(host, str) and host.strip():
+            host = host.strip()
+            if host in ("0.0.0.0", "::", "::0", "*"):
+                host = "127.0.0.1"
+            if ":" in host and not host.startswith("["):
+                host = f"[{host}]"
+            print(f"http://{host}:{port}")
+            raise SystemExit(0)
+    except Exception:
+        pass
+
+print("http://127.0.0.1:18789")
+PY
+}
+
+octu_gateway_is_loopback_url() {
+  python3 - "$1" <<'PY'
+import sys
+from urllib.parse import urlparse
+
+url = sys.argv[1].strip()
+parsed = urlparse(url)
+host = (parsed.hostname or "").lower()
+if host in {"localhost", "127.0.0.1", "::1"}:
+    raise SystemExit(0)
+if host.startswith("127."):
+    raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
+octu_gateway_probe() {
+  local base_url="${1:-}"
+  local output_json="${2:-}"
+  local output_txt="${3:-}"
+  local connect_timeout="${4:-1}"
+  local max_time="${5:-2}"
+  local -a candidate_paths=()
+  local path url curl_output http_code curl_rc state note latency_ms body_file chosen_url
+  local best_state="DOWN"
+  local best_note="unreachable"
+  local best_http_code="000"
+  local best_latency_ms=""
+  local best_path=""
+  local best_body=""
+  local best_curl_rc="7"
+
+  [[ -n "${base_url}" ]] || base_url="$(octu_gateway_base_url)"
+
+  if ! command -v curl >/dev/null 2>&1; then
+    best_note="curl_missing"
+  elif ! octu_gateway_is_loopback_url "${base_url}"; then
+    best_note="nonlocal_target_blocked"
+  else
+    candidate_paths=("/health" "/readyz" "/")
+    for path in "${candidate_paths[@]}"; do
+      body_file="$(mktemp "${TMPDIR:-/tmp}/triage-gateway-body.XXXXXX")"
+      url="${base_url%/}${path}"
+      curl_output="$(curl \
+        --silent --show-error \
+        --connect-timeout "${connect_timeout}" \
+        --max-time "${max_time}" \
+        --output "${body_file}" \
+        --write-out '%{http_code} %{time_total}' \
+        "${url}" 2>/dev/null)"
+      curl_rc=$?
+
+      if (( curl_rc == 0 )); then
+        http_code="${curl_output%% *}"
+        latency_ms="$(python3 -c "import sys; print(int(round(float(sys.argv[1]) * 1000)))" "${curl_output#* }" 2>/dev/null || echo "")"
+        if [[ "${http_code}" == 2* || "${http_code}" == 3* ]]; then
+          best_state="OK"
+          best_note="direct_probe_${path#/}_http_${http_code}"
+          [[ "${path}" == "/" ]] && best_note="direct_probe_root_http_${http_code}"
+          best_http_code="${http_code}"
+          best_latency_ms="${latency_ms}"
+          best_path="${path}"
+          best_curl_rc="${curl_rc}"
+          best_body="$(cat "${body_file}" 2>/dev/null || true)"
+          chosen_url="${url}"
+          rm -f "${body_file}" 2>/dev/null || true
+          break
+        fi
+
+        if [[ "${best_state}" != "OK" ]]; then
+          best_state="WARN"
+          best_note="direct_probe_${path#/}_http_${http_code}"
+          [[ "${path}" == "/" ]] && best_note="direct_probe_root_http_${http_code}"
+          best_http_code="${http_code}"
+          best_latency_ms="${latency_ms}"
+          best_path="${path}"
+          best_curl_rc="${curl_rc}"
+          best_body="$(cat "${body_file}" 2>/dev/null || true)"
+          chosen_url="${url}"
+        fi
+      elif [[ "${best_state}" == "DOWN" ]]; then
+        best_note="curl_exit_${curl_rc}"
+        best_curl_rc="${curl_rc}"
+      fi
+
+      rm -f "${body_file}" 2>/dev/null || true
+    done
+  fi
+
+  if [[ -n "${output_json}" ]]; then
+    cat > "${output_json}" <<EOF
+{"base_url":"$(json_escape "${base_url}")","url":"$(json_escape "${chosen_url:-}")","path":"$(json_escape "${best_path:-}")","state":"$(json_escape "${best_state}")","note":"$(json_escape "${best_note}")","http_code":"$(json_escape "${best_http_code}")","latency_ms":"$(json_escape "${best_latency_ms}")","curl_exit_code":"$(json_escape "${best_curl_rc}")"}
+EOF
+  fi
+
+  if [[ -n "${output_txt}" ]]; then
+    cat > "${output_txt}" <<EOF
+base_url: ${base_url}
+url: ${chosen_url:-}
+path: ${best_path:-}
+state: ${best_state}
+note: ${best_note}
+http_code: ${best_http_code}
+latency_ms: ${best_latency_ms}
+curl_exit_code: ${best_curl_rc}
+EOF
+  fi
+
+  printf '%s|%s|%s|%s|%s|%s\n' \
+    "${best_state}" \
+    "${best_note}" \
+    "${best_http_code}" \
+    "${best_latency_ms}" \
+    "${best_path}" \
+    "${best_curl_rc}"
+}
+
 redact_secret_stream() {
   python3 -c "$(cat <<'PY'
 import re
@@ -269,6 +430,9 @@ PY
 }
 
 export -f redact_secret_stream 2>/dev/null || true
+export -f octu_gateway_base_url 2>/dev/null || true
+export -f octu_gateway_is_loopback_url 2>/dev/null || true
+export -f octu_gateway_probe 2>/dev/null || true
 
 octu_write_collector_metadata_file() {
   local outfile="$1"
@@ -315,6 +479,18 @@ gateway_summary() {
   local err_file="$1/gateway_err_tail.txt"
 
   if [[ -f "${health_file}" ]]; then
+    if grep -Eiq '^state:\s*DOWN|gateway:\s*DOWN|unreachable|curl_exit_' "${health_file}"; then
+      printf 'DOWN'
+      return 0
+    fi
+    if grep -Eiq '^state:\s*OK|gateway:\s*OK|healthy|status: ok|HTTP 200|connected|ready' "${health_file}"; then
+      printf 'OK'
+      return 0
+    fi
+    if grep -Eiq '^state:\s*WARN|gateway:\s*WARN|degraded|fail|error|timeout|unhealthy|not ok|HTTP [45][0-9][0-9]' "${health_file}"; then
+      printf 'WARN'
+      return 0
+    fi
     if grep -Eiq 'healthy|gateway: ok|status: ok|HTTP 200|connected|ready' "${health_file}"; then
       printf 'OK'
       return 0

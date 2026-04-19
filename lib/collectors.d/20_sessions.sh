@@ -10,6 +10,7 @@ collector_run() {
   local lineage="OK"
   local artifact_state="OK"
   local confidence="HIGH"
+  local agent_dirs=0
 
   if [[ ! -d "${sessions_root}" ]]; then
     cat > "${bundle_dir}/agent_session_topology.txt" <<EOF
@@ -45,6 +46,12 @@ import json, glob, os, time
 sessions_root = os.path.expanduser('${sessions_root}')
 cutoff_ms = int((time.time() - 3600) * 1000)
 agents = total = recent = 0
+agent_dirs = 0
+
+for agent_dir in sorted(glob.glob(sessions_root + '/*')):
+    if os.path.basename(agent_dir) == '_orphaned_sessions' or not os.path.isdir(agent_dir):
+        continue
+    agent_dirs += 1
 
 for idx in sorted(glob.glob(sessions_root + '/*/sessions/sessions.json')):
     agents += 1
@@ -64,9 +71,9 @@ for idx in sorted(glob.glob(sessions_root + '/*/sessions/sessions.json')):
 
 # Orphans: files in _orphaned_sessions dir (informational only)
 orphan = len(glob.glob(sessions_root + '/_orphaned_sessions/*.jsonl'))
-print(agents, total, recent, orphan)
+print(agents, total, recent, orphan, agent_dirs)
 " 2>/dev/null || echo "0 0 0 0")"
-  read -r agents total recent orphan <<< "${enum_result}"
+  read -r agents total recent orphan agent_dirs <<< "${enum_result}"
 
   # Classification — orphan count is informational only (Archer verdict 2026-04-13)
   # FANOUT_ANOMALY threshold raised to 500 — 105 sessions across 33 agents is normal
@@ -76,6 +83,11 @@ print(agents, total, recent, orphan)
     classification="HIGH_ACTIVITY"
   elif (( agents > 0 )); then
     classification="NORMAL"
+  elif (( agent_dirs > 0 )); then
+    classification="INCOMPLETE"
+    lineage="UNKNOWN"
+    artifact_state="PARTIAL"
+    confidence="LOW"
   fi
 
   cat > "${bundle_dir}/agent_session_topology.txt" <<EOF

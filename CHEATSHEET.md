@@ -36,7 +36,7 @@ triage --self-test        # Verify install integrity before trusting output
 
 | Signal | What it means |
 |--------|--------------|
-| `gateway` | Is OpenClaw running and healthy? (HTTP probe via healthcheck agent) |
+| `gateway` | Is OpenClaw running and healthy? (direct local HTTP probe; optional enrichment if present) |
 | `sessions` | How many agents? Any orphans? |
 | `digest` | Is the memory system (DIGEST.md) fresh? |
 | `disk` | Enough space to keep running? |
@@ -66,7 +66,9 @@ Every run writes to `~/triage-bundles/<timestamp>/`:
 | File | What's in it |
 |------|-------------|
 | `bundle_summary.txt` | Version, timestamp, hostname |
-| `gateway_health.json` | Healthcheck agent output (status, latency, reason) |
+| `gateway_health.json` | Baseline direct probe result from triage |
+| `gateway_health_enrichment.json` | Optional sidecar telemetry copy if present |
+| `gateway_probe_meta.txt` | Probe target, path, latency, baseline state, telemetry state |
 | `gateway_err_tail.txt` | Recent gateway errors |
 | `agent_session_topology.txt` | Session counts, agents, orphan detection |
 | `collector_status.txt` | Raw per-collector status lines |
@@ -100,6 +102,8 @@ curl -fsSL https://raw.githubusercontent.com/acmeagentsupply/triage/main/scripts
 
 **Read-only. Local-only. No telemetry. Never modifies anything.**
 Only writes to `~/triage-bundles/`.
+
+Baseline gateway health does not require a background healthcheck writer.
 
 ---
 

@@ -43,7 +43,7 @@ get_version() {
 print_header() {
   local ver="${1:-}"
   printf '\n\033[1mtriage%s — Installer\033[0m\n' "${ver:+ v${ver}}"
-  printf '  Read-only triage tool | No telemetry | Local-only\n\n'
+  printf '  Read-only triage tool | No telemetry | Local-only | No gateway sidecar required\n\n'
 }
 
 # ── Detect execution context ─────────────────────────────────────────────────
@@ -133,6 +133,7 @@ run_self_test() {
     ok "Alias ${alias} prints deprecation notice"
   done
   ok "Self-test passed"
+  info "Baseline gateway health is probed directly by triage; sidecar telemetry is optional"
 }
 
 # ── Verify from source ───────────────────────────────────────────────────────

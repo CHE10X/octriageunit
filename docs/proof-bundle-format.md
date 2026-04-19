@@ -21,11 +21,21 @@ This file should contain the last 200 relevant lines from the gateway error stre
 
 ### `gateway_health.json`
 
-This file is copied from the healthcheck agent's output at `~/openclaw/health/gateway_health.json`. It records gateway status, HTTP response code, latency, and timestamp. The gateway collector reads this file directly — triage never probes the gateway itself.
+This file is written by triage's direct baseline probe. It records the resolved gateway target, the path that answered, the HTTP response code, latency, and the baseline state (`OK`, `WARN`, or `DOWN`).
 
-Key fields: `status` (OK/FAIL), `reason`, `latency_ms`, `ts` (ISO8601 UTC), `probe_exit`.
+Key fields: `base_url`, `url`, `path`, `state`, `note`, `http_code`, `latency_ms`, `curl_exit_code`.
 
-If missing, the gateway collector reports `NOT_DETECTED`. If the file's mtime is older than 120s, the collector reports `STALE`.
+This file is produced on every normal triage run. Baseline gateway health no longer depends on a prewritten sidecar file.
+
+### `gateway_health_enrichment.json`
+
+If `~/openclaw/health/gateway_health.json` exists, triage copies it here as optional enrichment telemetry. Its absence must not change the baseline gateway state.
+
+If present but stale or malformed, the collector should report that condition in metadata or notes without collapsing baseline health to `NOT_DETECTED`.
+
+### `gateway_probe_meta.txt`
+
+This file records the resolved probe target, selected path, HTTP code, curl exit code, baseline state, and optional telemetry state. It is the quick human-readable explanation for how the gateway collector classified the result.
 
 ### `agent_session_topology.txt`
 
