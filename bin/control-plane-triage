@@ -261,7 +261,7 @@ if config_path.exists():
         host = gateway.get("bind") or gateway.get("host") or "127.0.0.1"
         if isinstance(host, str) and host.strip():
             host = host.strip()
-            if host in ("0.0.0.0", "::", "::0", "*"):
+            if host in ("loopback", "localhost", "0.0.0.0", "::", "::0", "*"):
                 host = "127.0.0.1"
             if ":" in host and not host.startswith("["):
                 host = f"[{host}]"
@@ -479,7 +479,7 @@ gateway_summary() {
   local err_file="$1/gateway_err_tail.txt"
 
   if [[ -f "${health_file}" ]]; then
-    if grep -Eiq '^state:\s*DOWN|gateway:\s*DOWN|unreachable|curl_exit_' "${health_file}"; then
+    if grep -Eiq '^state:\s*DOWN|^gateway:\s*DOWN|^note:\s*(unreachable|curl_exit_[1-9][0-9]*)\b|^curl_exit_code:\s*[1-9][0-9]*\b' "${health_file}"; then
       printf 'DOWN'
       return 0
     fi

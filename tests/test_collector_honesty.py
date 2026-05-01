@@ -31,6 +31,44 @@ def run_bash(script: str, home: pathlib.Path, bin_dir: pathlib.Path) -> subproce
 
 
 class CollectorHonestyTests(unittest.TestCase):
+    def test_gateway_summary_reports_ok_for_successful_probe_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            bundle = pathlib.Path(tmpdir)
+            (bundle / "gateway_health.txt").write_text(
+                textwrap.dedent(
+                    """\
+                    base_url: http://127.0.0.1:18789
+                    url: http://127.0.0.1:18789/health
+                    path: /health
+                    state: OK
+                    note: direct_probe_health_http_200
+                    http_code: 200
+                    latency_ms: 12
+                    curl_exit_code: 0
+                    """
+                )
+            )
+
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-lc",
+                    textwrap.dedent(
+                        f"""
+                        source \"{REPO_ROOT / 'bin/control-plane-triage'}\"
+                        gateway_summary \"{bundle}\"
+                        """
+                    ),
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "OK")
+
     def test_gateway_direct_probe_reports_ok_without_sidecar(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = pathlib.Path(tmpdir)
@@ -134,6 +172,44 @@ class CollectorHonestyTests(unittest.TestCase):
             self.assertIn("state=OK", result.stdout)
             self.assertIn("telemetry=MALFORMED", result.stdout)
             self.assertIn("telemetry_state: MALFORMED", result.stdout)
+
+    def test_gateway_summary_reports_down_for_nonzero_curl_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            bundle = pathlib.Path(tmpdir)
+            (bundle / "gateway_health.txt").write_text(
+                textwrap.dedent(
+                    """\
+                    base_url: http://127.0.0.1:18789
+                    url:
+                    path:
+                    state: DOWN
+                    note: curl_exit_7
+                    http_code: 000
+                    latency_ms:
+                    curl_exit_code: 7
+                    """
+                )
+            )
+
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-lc",
+                    textwrap.dedent(
+                        f"""
+                        source \"{REPO_ROOT / 'bin/control-plane-triage'}\"
+                        gateway_summary \"{bundle}\"
+                        """
+                    ),
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "DOWN")
 
     def test_gateway_direct_probe_reports_down_when_unreachable(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
